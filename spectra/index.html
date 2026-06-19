@@ -268,7 +268,6 @@
       <button class="ctrl" id="modeNight" aria-pressed="false">Nachtsicht</button>
       <button class="ctrl" id="torchBtn" aria-pressed="false">Licht</button>
       <button class="ctrl" id="blurBtn" aria-pressed="false">Personen verwischen</button>
-      <button class="ctrl" id="vrBtn" aria-pressed="true">VR</button>
     </div>
 
     <div class="row">
@@ -304,7 +303,6 @@ const modeClearBtn = document.getElementById("modeClear");
 const modeNightBtn = document.getElementById("modeNight");
 const torchBtn = document.getElementById("torchBtn");
 const blurBtn = document.getElementById("blurBtn");
-const vrBtn = document.getElementById("vrBtn");
 const zoomInBtn = document.getElementById("zoomIn");
 const zoomOutBtn = document.getElementById("zoomOut");
 const toggleBtn = document.getElementById("toggleBtn");
@@ -317,7 +315,9 @@ let zoom = 1;                    // logical zoom level, 1 .. ZOOM_MAX
 let nativeZoomUsable = false;    // true if the camera supports optical/native zoom
 let torchOn = false;
 let hideTimer = null;
-let vrOn = true;                 // side-by-side VR (one image per eye) — on by default
+// Side-by-side VR (one image per eye) is always on — this app is built to sit in
+// a phone VR headset, so the split view is permanent and has no toggle.
+const vrOn = true;
 
 const ZOOM_MAX = 8;
 const ZOOM_STEP = 0.5;
@@ -383,28 +383,20 @@ function showGateError(err) {
 // ---- Visual modes (CSS filters) --------------------------------------------
 
 function applyMode() {
-  let filter;
   if (mode === "night") {
-    // Night vision: amplify the available light hard so a near-dark scene
-    // becomes readable. The brightness() calls stack — each one multiplies the
-    // last — so the boost is much stronger than a single pass. Contrast lifts
-    // shadow detail out of the noise, saturate(0) strips distracting colour,
-    // and the sepia + hue-rotate paint it in green phosphor: the colour the eye
-    // resolves best in the dark and the user's preferred high-contrast scheme.
-    // The camera sensor is also driven to its brightest exposure / ISO in
-    // applyTrackSettings(), so this is real low-light gain, not just a recolour.
-    filter = "brightness(1.9) contrast(1.5) saturate(0) brightness(1.4) " +
-             "sepia(0.85) hue-rotate(60deg) brightness(1.15)";
+    // Night vision is ADAPTIVE: the render loop measures how dark the scene
+    // actually is each frame and stretches that narrow band of dark tones across
+    // the full range (see updateNightVision). We seed a reasonable filter here so
+    // there is no flash before the first measurement lands.
+    canvas.style.filter = video.style.filter = nightFilter(nightB, nightC);
   } else {
-    // Klar mode: gentle lift only, true colour, like looking through glass.
-    filter = "brightness(1.15) contrast(1.08) saturate(1.05)";
+    // Klar mode: gentle fixed lift, true colour, like looking through glass.
+    canvas.style.filter = video.style.filter =
+      "brightness(1.12) contrast(1.06) saturate(1.05)";
   }
-  // Both surfaces get the same look; only one is visible at a time.
-  video.style.filter = filter;
-  canvas.style.filter = filter;
   modeClearBtn.setAttribute("aria-pressed", String(mode === "clear"));
   modeNightBtn.setAttribute("aria-pressed", String(mode === "night"));
-  // The mode also changes the sensor exposure, so re-apply track settings.
+  // Night mode also drives the camera sensor to its brightest exposure / ISO.
   applyTrackSettings().catch(() => {});
   updateStatus();
 }
@@ -507,7 +499,6 @@ function toggleTorch() {
 function updateStatus(extra) {
   const label = mode === "night" ? "Nachtsicht" : "Klar-Modus";
   let text = `${label} · ${zoom.toFixed(1)}×`;
-  if (vrOn) text += " · VR";
   if (blurOn) {
     text += personBoxes.length
       ? ` · ${personBoxes.length} ${personBoxes.length === 1 ? "Person" : "Personen"} verwischt`
@@ -627,15 +618,8 @@ function disableBlur() {
 
 // ---- VR side-by-side + surface management ----------------------------------
 
-function toggleVr() {
-  vrOn = !vrOn;
-  vrBtn.setAttribute("aria-pressed", String(vrOn));
-  updateSurfaces();
-  flashControls();
-}
-
-// The canvas is used whenever we must compose the picture ourselves: VR
-// side-by-side, person-blur, or both. Otherwise the plain <video> shows.
+// The canvas composes the picture we show: VR side-by-side (always) plus
+// person-blur when enabled. Because VR is permanent, the canvas is always live.
 function usingCanvas() {
   return vrOn || blurOn;
 }
@@ -669,6 +653,84 @@ function sizeCanvas() {
   }
 }
 
+// ---- Adaptive night vision -------------------------------------------------
+// A plain "multiply the brightness" night mode just washes a dark frame grey:
+// in near-darkness the whole picture is squashed into the lowest few brightness
+// values, so a bigger multiplier only amplifies noise — no real detail appears.
+//
+// Instead we measure the scene every few frames on a tiny 80x45 copy, find the
+// darkest and brightest tones ACTUALLY present (2nd and 98th percentile, so a
+// few stray noise pixels don't skew it), and stretch just that band across the
+// full 0–255 range. A room lit only in tones 6–40 gets expanded to 0–255,
+// pulling genuine detail out of the black. The result is then desaturated and
+// tinted green — the colour the eye resolves best in the dark and the user's
+// preferred high-contrast scheme. The camera sensor is independently pushed to
+// its brightest exposure / ISO in applyTrackSettings(), so this is real
+// low-light gain layered on top of true sensor gain, not just a recolour.
+
+const nightCanvas = document.createElement("canvas");
+nightCanvas.width = 80;
+nightCanvas.height = 45;
+const nctx = nightCanvas.getContext("2d", { willReadFrequently: true });
+
+let nightB = 2.2;   // smoothed brightness currently applied
+let nightC = 1.3;   // smoothed contrast currently applied
+let nightTick = 0;  // frame counter, so we re-measure every few frames
+
+// Build the night-vision CSS filter from a brightness/contrast pair. The stretch
+// (brightness + contrast) runs first to reveal shadow detail, THEN colour is
+// dropped and green phosphor is painted on.
+function nightFilter(b, c) {
+  return `brightness(${b.toFixed(3)}) contrast(${c.toFixed(3)}) ` +
+         `saturate(0) sepia(0.8) hue-rotate(70deg) brightness(1.06)`;
+}
+
+function updateNightVision() {
+  // Re-measure every 3rd frame — responsive enough, but easy on the battery.
+  if ((nightTick++ % 3) !== 0) return;
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw || !vh) return;
+
+  nctx.drawImage(video, 0, 0, nightCanvas.width, nightCanvas.height);
+  let data;
+  try {
+    data = nctx.getImageData(0, 0, nightCanvas.width, nightCanvas.height).data;
+  } catch (_) {
+    return;   // can't read the pixels — keep the current look
+  }
+
+  // Build a 256-bin luminance histogram of the whole scene.
+  const hist = new Uint32Array(256);
+  const total = data.length / 4;
+  for (let i = 0; i < data.length; i += 4) {
+    const lum = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) | 0;
+    hist[lum]++;
+  }
+
+  // Black point = 2nd percentile, white point = 98th percentile.
+  const tail = total * 0.02;
+  let acc = 0, lo = 0, hi = 255;
+  for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= tail) { lo = v; break; } }
+  acc = 0;
+  for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc >= tail) { hi = v; break; } }
+  if (hi - lo < 10) hi = Math.min(255, lo + 10);   // guard a flat / tiny range
+
+  // We want out = (in - lo)/(hi - lo). CSS brightness(B) then contrast(C) gives
+  // out = in*(B*C) + (0.5 - 0.5*C), so solve for C then B.
+  const loN = lo / 255, hiN = hi / 255;
+  const gain = 1 / (hiN - loN);
+  const offset = -loN * gain;
+  let c = 1 - 2 * offset;
+  let b = gain / c;
+  c = Math.min(3, Math.max(1, c));   // clamp so pure noise can't explode
+  b = Math.min(6, Math.max(1, b));
+
+  // Ease toward the new target so the picture never pulses or flickers.
+  nightB += (b - nightB) * 0.1;
+  nightC += (c - nightC) * 0.1;
+  canvas.style.filter = nightFilter(nightB, nightC);
+}
+
 function startRenderLoop() {
   const render = () => {
     if (!usingCanvas()) { rafId = null; return; }
@@ -689,6 +751,7 @@ function startRenderLoop() {
       } else {
         drawEye(0, 0, W, H);
       }
+      if (mode === "night") updateNightVision();
       if (blurOn) runDetection();
     }
     rafId = requestAnimationFrame(render);
@@ -764,7 +827,6 @@ modeClearBtn.addEventListener("click", () => setMode("clear"));
 modeNightBtn.addEventListener("click", () => setMode("night"));
 torchBtn.addEventListener("click", toggleTorch);
 blurBtn.addEventListener("click", toggleBlur);
-vrBtn.addEventListener("click", toggleVr);
 
 zoomInBtn.addEventListener("click", () => zoomBy(ZOOM_STEP));
 zoomOutBtn.addEventListener("click", () => zoomBy(-ZOOM_STEP));
