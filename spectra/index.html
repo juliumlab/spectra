@@ -1,0 +1,821 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+
+<!-- Installable PWA: home-screen icon, fullscreen, offline after first load. -->
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-title" content="Spectra">
+
+<title>Spectra — Sehhilfe</title>
+<style>
+  :root {
+    --green: #90EE90;
+    --green-bright: #B6F5B6;
+    --green-dim: #4FAF4F;
+    --bg: #000000;
+  }
+
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--green);
+    font-family: system-ui, -apple-system, sans-serif;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
+  /* The live camera image. CSS filters do the night-vision / brightness work,
+     and transform: scale() does the digital zoom. Both are GPU-accelerated,
+     so the picture stays smooth and the battery lasts longer.
+     #processView is the canvas used only when "Blur people" is on — it shows
+     the same picture with each detected person blurred. Only one is visible
+     at a time; both share the same zoom / brightness styling. */
+  #cameraView, #processView {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    background: #000;
+    transform-origin: center center;
+    transition: filter 0.15s linear;
+  }
+  #cameraView { z-index: 0; }
+  /* The canvas (VR side-by-side and/or person-blur) sits on top of the video
+     when active. The video stays in the DOM and keeps decoding — some phones
+     freeze a display:none video, which would stall the canvas. */
+  #processView { display: none; z-index: 1; }
+  body.canvasview #processView { display: block; }
+
+  /* Invisible tap zones: left half zooms out, right half zooms in. */
+  .tapZone {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    width: 35%;
+    z-index: 5;
+    background: transparent;
+    border: none;
+    padding: 0;
+    margin: 0;
+  }
+  #tapZoomOut { left: 0; }
+  #tapZoomIn { right: 0; }
+
+  /* Centre tap region shows / hides the control bar. */
+  #tapToggle {
+    position: fixed;
+    left: 35%;
+    right: 35%;
+    top: 0;
+    bottom: 0;
+    z-index: 5;
+    background: transparent;
+    border: none;
+  }
+
+  #status {
+    position: fixed;
+    top: max(12px, env(safe-area-inset-top));
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10;
+    background: rgba(0,0,0,0.7);
+    color: var(--green-bright);
+    border: 1px solid var(--green-dim);
+    border-radius: 8px;
+    padding: 4px 9px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    white-space: nowrap;
+    pointer-events: none;
+    text-align: center;
+    max-width: 92vw;
+  }
+
+  #controls {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+    background: linear-gradient(to top, rgba(0,0,0,0.92), rgba(0,0,0,0.0));
+    transition: opacity 0.25s linear, transform 0.25s linear;
+  }
+  #controls.hidden {
+    opacity: 0;
+    transform: translateY(20px);
+    pointer-events: none;
+  }
+
+  /* Small always-visible button (top-left) to hide or show every control. */
+  #toggleBtn {
+    position: fixed;
+    top: max(8px, env(safe-area-inset-top));
+    left: max(8px, env(safe-area-inset-left));
+    z-index: 25;
+    width: 38px;
+    height: 38px;
+    font-size: 18px;
+    color: var(--green);
+    background: rgba(0,0,0,0.55);
+    border: 1px solid var(--green-dim);
+    border-radius: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
+  }
+  #toggleBtn:active { background: rgba(0,40,0,0.85); }
+
+  .row {
+    display: flex;
+    gap: 7px;
+    align-items: stretch;
+  }
+
+  button.ctrl, label.ctrl {
+    flex: 1;
+    min-height: 40px;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.15;
+    color: var(--green);
+    background: #001a00;
+    border: 1px solid var(--green-dim);
+    border-radius: 9px;
+    padding: 4px 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    cursor: pointer;
+    user-select: none;
+  }
+  button.ctrl:active { background: #003300; }
+  button.ctrl[aria-pressed="true"],
+  button.ctrl.active {
+    background: #0c3d0c;
+    border-color: var(--green-bright);
+    color: var(--green-bright);
+  }
+  button.ctrl:focus-visible,
+  input:focus-visible {
+    outline: 3px solid var(--green-bright);
+    outline-offset: 2px;
+  }
+  button.ctrl:disabled {
+    opacity: 0.4;
+    border-style: dashed;
+  }
+
+  /* Full-screen message shown before the camera starts or on error. */
+  #gate {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    padding: 24px;
+    padding-bottom: 56px;
+    background: #000;
+    text-align: center;
+    overflow-y: auto;
+  }
+  #gate h1 { font-size: 26px; color: var(--green-bright); margin: 0; letter-spacing: 1px; }
+  #gate p { font-size: 15px; line-height: 1.5; margin: 0; max-width: 24em; color: var(--green); }
+  #gate .err { color: #ff9b9b; border: 1px solid #ff9b9b; border-radius: 10px; padding: 12px; }
+  #startBtn {
+    min-height: 72px;
+    font-size: 22px;
+    padding: 14px 40px;
+  }
+  .hint { color: var(--green-dim); font-size: 13px; }
+  /* Credit pinned to the bottom-right corner, clear of the centred text. */
+  #gate .credit {
+    position: fixed;
+    right: 14px;
+    bottom: 12px;
+    margin: 0;
+    color: var(--green-dim);
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    pointer-events: none;
+  }
+  /* The app is landscape-only. In portrait this overlay covers everything
+     (including the start screen) and asks the user to turn the phone sideways. */
+  #rotate {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    background: #000;
+    color: var(--green-bright);
+    text-align: center;
+    padding: 24px;
+  }
+  #rotate[hidden] { display: none; }
+  #rotate .rot-icon { font-size: 52px; line-height: 1; }
+  #rotate p { font-size: 18px; font-weight: 700; margin: 0; max-width: 18em; }
+</style>
+</head>
+<body>
+
+  <video id="cameraView" playsinline autoplay muted></video>
+  <canvas id="processView"></canvas>
+
+  <button id="tapZoomOut" class="tapZone" aria-label="Verkleinern"></button>
+  <button id="tapToggle" aria-label="Bedienelemente ein- oder ausblenden"></button>
+  <button id="tapZoomIn" class="tapZone" aria-label="Vergrößern"></button>
+
+  <button id="toggleBtn" aria-label="Alle Knöpfe ein- oder ausblenden">≡</button>
+
+  <div id="status" role="status" aria-live="polite">Klar-Modus · 1.0×</div>
+
+  <div id="rotate" hidden>
+    <div class="rot-icon" aria-hidden="true">⟲</div>
+    <p>Bitte das Handy quer halten</p>
+  </div>
+
+  <div id="controls">
+    <div class="row">
+      <button class="ctrl" id="modeClear" aria-pressed="true">Klar</button>
+      <button class="ctrl" id="modeNight" aria-pressed="false">Nachtsicht</button>
+      <button class="ctrl" id="torchBtn" aria-pressed="false">Licht</button>
+      <button class="ctrl" id="blurBtn" aria-pressed="false">Personen verwischen</button>
+      <button class="ctrl" id="vrBtn" aria-pressed="true">VR</button>
+    </div>
+
+    <div class="row">
+      <button class="ctrl" id="zoomOut" style="font-size:16px;" aria-label="Verkleinern">− Verkleinern</button>
+      <button class="ctrl" id="zoomIn" style="font-size:16px;" aria-label="Vergrößern">Vergrößern +</button>
+    </div>
+  </div>
+
+  <div id="gate">
+    <h1>Spectra</h1>
+    <p>Sehhilfe mit Durchblick. Tippe auf „Kamera starten“, um die Rückkamera
+       einzuschalten.</p>
+    <button class="ctrl" id="startBtn">Kamera starten</button>
+    <p class="hint">Das Bild bleibt auf deinem Handy. Für die VR-Brille das Handy
+       quer (horizontal) halten.</p>
+    <div id="gateError" class="err" hidden></div>
+    <p class="credit">erstellt von JLAB</p>
+  </div>
+
+<script>
+"use strict";
+
+const video = document.getElementById("cameraView");
+const canvas = document.getElementById("processView");
+const ctx = canvas.getContext("2d");
+const statusEl = document.getElementById("status");
+const controls = document.getElementById("controls");
+const gate = document.getElementById("gate");
+const gateError = document.getElementById("gateError");
+const rotateOverlay = document.getElementById("rotate");
+
+const modeClearBtn = document.getElementById("modeClear");
+const modeNightBtn = document.getElementById("modeNight");
+const torchBtn = document.getElementById("torchBtn");
+const blurBtn = document.getElementById("blurBtn");
+const vrBtn = document.getElementById("vrBtn");
+const zoomInBtn = document.getElementById("zoomIn");
+const zoomOutBtn = document.getElementById("zoomOut");
+const toggleBtn = document.getElementById("toggleBtn");
+
+let stream = null;
+let videoTrack = null;
+let capabilities = {};
+let mode = "clear";              // "clear" or "night"
+let zoom = 1;                    // logical zoom level, 1 .. ZOOM_MAX
+let nativeZoomUsable = false;    // true if the camera supports optical/native zoom
+let torchOn = false;
+let hideTimer = null;
+let vrOn = true;                 // side-by-side VR (one image per eye) — on by default
+
+const ZOOM_MAX = 8;
+const ZOOM_STEP = 0.5;
+// Cap the canvas pixel ratio so the side-by-side render stays smooth on phones.
+const DPR = Math.min(window.devicePixelRatio || 1, 2);
+
+// ---- Camera start ----------------------------------------------------------
+
+async function startCamera() {
+  gateError.hidden = true;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: "environment" },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 }
+      },
+      audio: false
+    });
+  } catch (err) {
+    showGateError(err);
+    return;
+  }
+
+  video.srcObject = stream;
+  videoTrack = stream.getVideoTracks()[0];
+
+  try {
+    capabilities = videoTrack.getCapabilities ? videoTrack.getCapabilities() : {};
+  } catch (_) {
+    capabilities = {};
+  }
+
+  nativeZoomUsable = !!(capabilities.zoom && capabilities.zoom.max > capabilities.zoom.min);
+
+  // Torch support is checked when the Licht button is tapped — some phones only
+  // report the flashlight capability once the camera is fully running.
+
+  // For night vision, ask the camera itself for the longest/brightest exposure
+  // it allows. Support varies, so this is best-effort on top of the CSS boost.
+  gate.style.display = "none";
+  tryLockLandscape();
+  applyMode();
+  updateSurfaces();   // VR is on by default, so start the canvas renderer now
+  scheduleHide();
+}
+
+function showGateError(err) {
+  let msg = "Kamera konnte nicht geöffnet werden.";
+  if (err && err.name === "NotAllowedError") {
+    msg = "Kamera-Berechtigung wurde blockiert. Erlaube den Kamerazugriff in den Browser-Einstellungen und lade die Seite neu.";
+  } else if (err && err.name === "NotFoundError") {
+    msg = "Auf diesem Gerät wurde keine Kamera gefunden.";
+  } else if (location.protocol !== "https:" && location.hostname !== "localhost") {
+    msg = "Die Kamera funktioniert nur über eine sichere (HTTPS-)Adresse. Öffne diese Seite über einen https://-Link.";
+  } else if (err && err.message) {
+    msg = "Kamerafehler: " + err.message;
+  }
+  gateError.textContent = msg;
+  gateError.hidden = false;
+}
+
+// ---- Visual modes (CSS filters) --------------------------------------------
+
+function applyMode() {
+  let filter;
+  if (mode === "night") {
+    // Night vision: amplify the available light hard so a near-dark scene
+    // becomes readable. The brightness() calls stack — each one multiplies the
+    // last — so the boost is much stronger than a single pass. Contrast lifts
+    // shadow detail out of the noise, saturate(0) strips distracting colour,
+    // and the sepia + hue-rotate paint it in green phosphor: the colour the eye
+    // resolves best in the dark and the user's preferred high-contrast scheme.
+    // The camera sensor is also driven to its brightest exposure / ISO in
+    // applyTrackSettings(), so this is real low-light gain, not just a recolour.
+    filter = "brightness(1.9) contrast(1.5) saturate(0) brightness(1.4) " +
+             "sepia(0.85) hue-rotate(60deg) brightness(1.15)";
+  } else {
+    // Klar mode: gentle lift only, true colour, like looking through glass.
+    filter = "brightness(1.15) contrast(1.08) saturate(1.05)";
+  }
+  // Both surfaces get the same look; only one is visible at a time.
+  video.style.filter = filter;
+  canvas.style.filter = filter;
+  modeClearBtn.setAttribute("aria-pressed", String(mode === "clear"));
+  modeNightBtn.setAttribute("aria-pressed", String(mode === "night"));
+  // The mode also changes the sensor exposure, so re-apply track settings.
+  applyTrackSettings().catch(() => {});
+  updateStatus();
+}
+
+function setMode(next) {
+  mode = next;
+  applyMode();
+  flashControls();
+}
+
+// ---- Zoom ------------------------------------------------------------------
+
+// Apply zoom and torch to the camera track TOGETHER, in one constraint set.
+// Setting them separately makes some phones drop the torch whenever the zoom
+// changes (and zoom changes on every rotate / mode switch) — that was why the
+// flashlight stopped working. Combining them keeps both stable.
+function applyTrackSettings() {
+  if (!videoTrack) return Promise.resolve();
+  const adv = {};
+  if (nativeZoomUsable && capabilities.zoom) {
+    const cap = capabilities.zoom;
+    const frac = (zoom - 1) / (ZOOM_MAX - 1);
+    adv.zoom = cap.min + frac * (cap.max - cap.min);
+  }
+  if ("torch" in capabilities) adv.torch = torchOn;
+
+  // Night vision pulls more light from the sensor itself: longest auto exposure,
+  // maximum exposure compensation, ISO and brightness the camera will allow.
+  // Clear mode hands exposure back to the camera's normal automatic metering.
+  // All of this is best-effort — phones expose very different capability sets,
+  // so each control is only touched when the camera reports supporting it.
+  if (mode === "night") {
+    if (capabilities.exposureMode && capabilities.exposureMode.includes("continuous")) {
+      adv.exposureMode = "continuous";
+    }
+    if (capabilities.exposureCompensation) adv.exposureCompensation = capabilities.exposureCompensation.max;
+    if (capabilities.iso) adv.iso = capabilities.iso.max;
+    if (capabilities.brightness) adv.brightness = capabilities.brightness.max;
+  } else {
+    if (capabilities.exposureMode && capabilities.exposureMode.includes("continuous")) {
+      adv.exposureMode = "continuous";
+    }
+    if (capabilities.exposureCompensation) adv.exposureCompensation = 0;
+  }
+
+  if (!Object.keys(adv).length) return Promise.resolve();
+  return videoTrack.applyConstraints({ advanced: [adv] });
+}
+
+function applyZoom() {
+  zoom = Math.min(ZOOM_MAX, Math.max(1, zoom));
+  applyTrackSettings().catch(() => {});
+
+  // In canvas mode (VR split and/or blur) the renderer does the digital zoom by
+  // cropping, so the element itself is never CSS-scaled. In the lightweight
+  // video path we scale the <video> directly (unless native zoom did the work).
+  const cssScale = (usingCanvas() || nativeZoomUsable) ? 1 : zoom;
+  video.style.transform = `scale(${cssScale})`;
+  canvas.style.transform = "scale(1)";
+  updateStatus();
+}
+
+function zoomBy(delta) {
+  zoom = Math.min(ZOOM_MAX, Math.max(1, +(zoom + delta).toFixed(2)));
+  applyZoom();
+  flashControls();
+}
+
+// ---- Torch / flashlight ----------------------------------------------------
+
+function toggleTorch() {
+  if (!videoTrack) return;
+  // Re-read capabilities in case the torch wasn't reported yet at startup.
+  if (!("torch" in capabilities)) {
+    try {
+      capabilities = videoTrack.getCapabilities ? videoTrack.getCapabilities() : capabilities;
+    } catch (_) { /* keep what we have */ }
+  }
+  if (!("torch" in capabilities)) {
+    torchBtn.textContent = "Kein Licht";
+    setTimeout(() => { torchBtn.textContent = "Licht"; }, 1500);
+    return;
+  }
+  torchOn = !torchOn;
+  applyTrackSettings()
+    .then(() => {
+      torchBtn.setAttribute("aria-pressed", String(torchOn));
+      torchBtn.textContent = torchOn ? "Licht an" : "Licht";
+    })
+    .catch(() => {
+      torchOn = false;
+      torchBtn.setAttribute("aria-pressed", "false");
+      torchBtn.textContent = "Licht";
+    });
+  flashControls();
+}
+
+// ---- Status line -----------------------------------------------------------
+
+function updateStatus(extra) {
+  const label = mode === "night" ? "Nachtsicht" : "Klar-Modus";
+  let text = `${label} · ${zoom.toFixed(1)}×`;
+  if (vrOn) text += " · VR";
+  if (blurOn) {
+    text += personBoxes.length
+      ? ` · ${personBoxes.length} ${personBoxes.length === 1 ? "Person" : "Personen"} verwischt`
+      : " · Verwischen an";
+  }
+  if (extra) text = extra;
+  statusEl.textContent = text;
+}
+
+// ---- Auto-hiding controls for an immersive "goggle" feel -------------------
+
+function showControls() {
+  controls.classList.remove("hidden");
+}
+function hideControls() {
+  controls.classList.add("hidden");
+}
+function scheduleHide() {
+  clearTimeout(hideTimer);
+  hideTimer = setTimeout(hideControls, 4000);
+}
+function flashControls() {
+  showControls();
+  scheduleHide();
+}
+function toggleControls() {
+  if (controls.classList.contains("hidden")) {
+    flashControls();
+  } else {
+    hideControls();
+  }
+}
+
+// ---- Blur people -----------------------------------------------------------
+// A small on-device AI model finds each person in the picture; we then paint a
+// strong blur over each one. The camera keeps drawing at full frame rate while
+// detection runs in the background, so the live view never stutters.
+// The model and its scripts are hosted in this site (vendor/ and model/), not
+// on an outside server — so there is no dependency that can fail (the earlier
+// 503 came from Google's server), and it works offline once cached.
+
+const TF_URL    = "vendor/tf.min.js";
+const MODEL_URL = "vendor/coco-ssd.min.js";
+const MODEL_JSON = "model/model.json";
+
+let detector = null;        // loaded coco-ssd model
+let detectorLoading = null; // in-flight load promise (so we never load twice)
+let blurOn = false;
+let detecting = false;      // a detection pass is currently running
+let rafId = null;           // render loop handle
+let personBoxes = [];       // latest detected person rectangles, in video pixels
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error("Could not load " + src));
+    document.head.appendChild(s);
+  });
+}
+
+async function ensureDetector() {
+  if (detector) return detector;
+  if (!detectorLoading) {
+    detectorLoading = (async () => {
+      if (typeof window.tf === "undefined") await loadScript(TF_URL);
+      if (typeof window.cocoSsd === "undefined") await loadScript(MODEL_URL);
+      // Load the model from our own site. Retry a couple of times in case a
+      // weight shard download hiccups on a flaky connection.
+      let lastErr = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          detector = await window.cocoSsd.load({ base: "lite_mobilenet_v2", modelUrl: MODEL_JSON });
+          return detector;
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+      throw lastErr;
+    })();
+  }
+  return detectorLoading;
+}
+
+async function toggleBlur() {
+  if (blurOn) {
+    disableBlur();
+    return;
+  }
+  if (!videoTrack) return;
+  blurBtn.disabled = true;
+  updateStatus("Personenerkennung lädt…");
+  try {
+    await ensureDetector();
+  } catch (err) {
+    detectorLoading = null;
+    blurBtn.disabled = false;
+    updateStatus("Erkennung konnte nicht geladen werden — beim ersten Mal ist Internet nötig");
+    setTimeout(updateStatus, 3000);
+    return;
+  }
+  blurBtn.disabled = false;
+  blurOn = true;
+  personBoxes = [];
+  blurBtn.setAttribute("aria-pressed", "true");
+  updateSurfaces();
+  flashControls();
+}
+
+function disableBlur() {
+  blurOn = false;
+  blurBtn.setAttribute("aria-pressed", "false");
+  updateSurfaces();
+  flashControls();
+}
+
+// ---- VR side-by-side + surface management ----------------------------------
+
+function toggleVr() {
+  vrOn = !vrOn;
+  vrBtn.setAttribute("aria-pressed", String(vrOn));
+  updateSurfaces();
+  flashControls();
+}
+
+// The canvas is used whenever we must compose the picture ourselves: VR
+// side-by-side, person-blur, or both. Otherwise the plain <video> shows.
+function usingCanvas() {
+  return vrOn || blurOn;
+}
+
+function updateSurfaces() {
+  const onCanvas = usingCanvas();
+  document.body.classList.toggle("canvasview", onCanvas);
+  if (onCanvas && !rafId) {
+    startRenderLoop();
+  } else if (!onCanvas && rafId) {
+    cancelAnimationFrame(rafId);
+    rafId = null;
+  }
+  applyZoom();   // re-applies the right zoom handling for the active surface
+  updateOrientation();
+  updateStatus();
+}
+
+// The app is landscape-only: block the whole UI whenever the phone is upright.
+function updateOrientation() {
+  const portrait = window.innerHeight > window.innerWidth;
+  rotateOverlay.hidden = !portrait;
+}
+
+function sizeCanvas() {
+  const w = Math.round(window.innerWidth * DPR);
+  const h = Math.round(window.innerHeight * DPR);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+}
+
+function startRenderLoop() {
+  const render = () => {
+    if (!usingCanvas()) { rafId = null; return; }
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    if (vw && vh) {
+      sizeCanvas();
+      const W = canvas.width, H = canvas.height;
+      ctx.filter = "none";
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0, 0, W, H);
+      if (vrOn) {
+        // Two copies side by side — one per eye — with a thin black gap.
+        const gap = Math.round(W * 0.012);
+        const eyeW = Math.floor((W - gap) / 2);
+        drawEye(0, 0, eyeW, H);
+        drawEye(eyeW + gap, 0, eyeW, H);
+      } else {
+        drawEye(0, 0, W, H);
+      }
+      if (blurOn) runDetection();
+    }
+    rafId = requestAnimationFrame(render);
+  };
+  rafId = requestAnimationFrame(render);
+}
+
+// Draw the camera picture "cover"-fitted into one rectangle (an eye), applying
+// digital zoom by cropping, and blurring each detected person inside it.
+function drawEye(dx, dy, dw, dh) {
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  const digital = nativeZoomUsable ? 1 : zoom;   // native zoom is already in the frame
+  const scale = Math.max(dw / vw, dh / vh) * digital;
+  const sw = dw / scale;
+  const sh = dh / scale;
+  const sx = (vw - sw) / 2;                       // centred crop
+  const sy = (vh - sh) / 2;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(dx, dy, dw, dh);
+  ctx.clip();                                     // keep this eye inside its half
+
+  ctx.filter = "none";
+  ctx.drawImage(video, sx, sy, sw, sh, dx, dy, dw, dh);
+
+  if (blurOn) {
+    for (const b of personBoxes) {
+      const padX = b.width * 0.12;
+      const padY = b.height * 0.12;
+      // Map the person box from video pixels into this eye's coordinates.
+      const rx = dx + (b.x - padX - sx) * scale;
+      const ry = dy + (b.y - padY - sy) * scale;
+      const rw = (b.width + padX * 2) * scale;
+      const rh = (b.height + padY * 2) * scale;
+      const strength = Math.max(14, Math.round(rw * 0.18));
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(rx, ry, rw, rh);
+      ctx.clip();
+      ctx.filter = `blur(${strength}px)`;
+      ctx.drawImage(video, sx, sy, sw, sh, dx, dy, dw, dh);
+      ctx.restore();
+    }
+  }
+
+  ctx.restore();
+  ctx.filter = "none";
+}
+
+async function runDetection() {
+  if (detecting || !detector) return;
+  detecting = true;
+  try {
+    const predictions = await detector.detect(video, 20);
+    personBoxes = predictions
+      .filter(p => p.class === "person" && p.score > 0.45)
+      .map(p => ({ x: p.bbox[0], y: p.bbox[1], width: p.bbox[2], height: p.bbox[3] }));
+    if (blurOn) updateStatus();
+  } catch (_) {
+    // A dropped detection frame is harmless — we keep the previous boxes.
+  } finally {
+    detecting = false;
+  }
+}
+
+// ---- Wiring ----------------------------------------------------------------
+
+document.getElementById("startBtn").addEventListener("click", startCamera);
+
+modeClearBtn.addEventListener("click", () => setMode("clear"));
+modeNightBtn.addEventListener("click", () => setMode("night"));
+torchBtn.addEventListener("click", toggleTorch);
+blurBtn.addEventListener("click", toggleBlur);
+vrBtn.addEventListener("click", toggleVr);
+
+zoomInBtn.addEventListener("click", () => zoomBy(ZOOM_STEP));
+zoomOutBtn.addEventListener("click", () => zoomBy(-ZOOM_STEP));
+
+document.getElementById("tapZoomIn").addEventListener("click", () => zoomBy(ZOOM_STEP));
+document.getElementById("tapZoomOut").addEventListener("click", () => zoomBy(-ZOOM_STEP));
+document.getElementById("tapToggle").addEventListener("click", toggleControls);
+toggleBtn.addEventListener("click", toggleControls);
+
+// Best-effort hardware-key support. On a desktop browser the arrow / +- keys
+// work; phone volume buttons are blocked by the browser, so the on-screen and
+// tap-zone controls are the real path on a phone.
+window.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowUp" || e.key === "+" || e.key === "=") { zoomBy(ZOOM_STEP); e.preventDefault(); }
+  if (e.key === "ArrowDown" || e.key === "-") { zoomBy(-ZOOM_STEP); e.preventDefault(); }
+  if (e.key === "n" || e.key === "N") { setMode(mode === "night" ? "clear" : "night"); }
+});
+
+// Keep the picture filling the screen if the phone is rotated, and re-check
+// the landscape-only rule.
+window.addEventListener("orientationchange", () => setTimeout(() => {
+  applyZoom();
+  updateOrientation();
+}, 300));
+window.addEventListener("resize", updateOrientation);
+
+// Best-effort hard lock to landscape (works on Android in fullscreen / when
+// installed as an app; iOS ignores it, so the rotate overlay is the fallback).
+function tryLockLandscape() {
+  try {
+    if (screen.orientation && screen.orientation.lock) {
+      screen.orientation.lock("landscape").catch(() => {});
+    }
+  } catch (_) { /* not supported — overlay handles it */ }
+}
+
+// Check orientation immediately on load, so portrait shows the rotate overlay
+// even before the camera starts.
+updateOrientation();
+
+// Register the service worker so the app installs to the home screen and runs
+// offline after the first load. Needs an https:// (or localhost) address;
+// silently does nothing when opened as a plain file.
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch(() => {
+      // No service worker (e.g. opened from file://) — the app still runs,
+      // it just won't be installable or offline-capable.
+    });
+  });
+}
+</script>
+</body>
+</html>
