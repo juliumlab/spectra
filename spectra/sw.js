@@ -8,7 +8,7 @@
      TensorFlow.js scripts and the blur model weights (CDN + Google storage).
      These are cached the first time they load, then served from cache offline. */
 
-const APP_VERSION = "spectra-v4";
+const APP_VERSION = "spectra-v6";
 const APP_CACHE = APP_VERSION + "-app";
 const RUNTIME_CACHE = APP_VERSION + "-runtime";
 

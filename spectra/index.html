@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="de">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
@@ -14,7 +14,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
 <meta name="apple-mobile-web-app-title" content="Spectra">
 
-<title>Spectra — Sehhilfe</title>
+<title>Spectra — Vision Aid</title>
 <style>
   :root {
     --green: #90EE90;
@@ -249,42 +249,47 @@
   <video id="cameraView" playsinline autoplay muted></video>
   <canvas id="processView"></canvas>
 
-  <button id="tapZoomOut" class="tapZone" aria-label="Verkleinern"></button>
-  <button id="tapToggle" aria-label="Bedienelemente ein- oder ausblenden"></button>
-  <button id="tapZoomIn" class="tapZone" aria-label="Vergrößern"></button>
+  <button id="tapZoomOut" class="tapZone" aria-label="Zoom out"></button>
+  <button id="tapToggle" aria-label="Show or hide the controls"></button>
+  <button id="tapZoomIn" class="tapZone" aria-label="Zoom in"></button>
 
-  <button id="toggleBtn" aria-label="Alle Knöpfe ein- oder ausblenden">≡</button>
+  <button id="toggleBtn" aria-label="Show or hide all buttons">≡</button>
 
-  <div id="status" role="status" aria-live="polite">Klar-Modus · 1.0×</div>
+  <div id="status" role="status" aria-live="polite">Clear mode · 1.0×</div>
 
   <div id="rotate" hidden>
     <div class="rot-icon" aria-hidden="true">⟲</div>
-    <p>Bitte das Handy quer halten</p>
+    <p>Please hold the phone sideways</p>
   </div>
 
   <div id="controls">
     <div class="row">
-      <button class="ctrl" id="modeClear" aria-pressed="true">Klar</button>
-      <button class="ctrl" id="modeNight" aria-pressed="false">Nachtsicht</button>
-      <button class="ctrl" id="torchBtn" aria-pressed="false">Licht</button>
-      <button class="ctrl" id="blurBtn" aria-pressed="false">Personen verwischen</button>
+      <button class="ctrl" id="modeClear" aria-pressed="true">Clear</button>
+      <button class="ctrl" id="modeNight" aria-pressed="false">Night vision</button>
+      <button class="ctrl" id="torchBtn" aria-pressed="false">Light</button>
+      <button class="ctrl" id="blurBtn" aria-pressed="false">Blur people</button>
     </div>
 
     <div class="row">
-      <button class="ctrl" id="zoomOut" style="font-size:16px;" aria-label="Verkleinern">− Verkleinern</button>
-      <button class="ctrl" id="zoomIn" style="font-size:16px;" aria-label="Vergrößern">Vergrößern +</button>
+      <button class="ctrl" id="zoomOut" style="font-size:16px;" aria-label="Zoom out">− Zoom out</button>
+      <button class="ctrl" id="zoomIn" style="font-size:16px;" aria-label="Zoom in">Zoom in +</button>
     </div>
+
+    <div class="row">
+      <button class="ctrl" id="maskBtn" aria-pressed="false" aria-describedby="maskHint">Masking sound: Off</button>
+    </div>
+    <p id="maskHint" class="hint" style="text-align:center; margin:2px 8px 0;">Soft noise through your headphones to cover background sound. Auto-stops when headphones are unplugged.</p>
   </div>
 
   <div id="gate">
     <h1>Spectra</h1>
-    <p>Sehhilfe mit Durchblick. Tippe auf „Kamera starten“, um die Rückkamera
-       einzuschalten.</p>
-    <button class="ctrl" id="startBtn">Kamera starten</button>
-    <p class="hint">Das Bild bleibt auf deinem Handy. Für die VR-Brille das Handy
-       quer (horizontal) halten.</p>
+    <p>A see-through vision aid. Tap “Start camera” to turn on the rear
+       camera.</p>
+    <button class="ctrl" id="startBtn">Start camera</button>
+    <p class="hint">The image stays on your phone. For the VR headset, hold the
+       phone sideways (horizontal).</p>
     <div id="gateError" class="err" hidden></div>
-    <p class="credit">erstellt von JLAB</p>
+    <p class="credit">created by JLAB</p>
   </div>
 
 <script>
@@ -353,7 +358,7 @@ async function startCamera() {
 
   nativeZoomUsable = !!(capabilities.zoom && capabilities.zoom.max > capabilities.zoom.min);
 
-  // Torch support is checked when the Licht button is tapped — some phones only
+  // Torch support is checked when the Light button is tapped — some phones only
   // report the flashlight capability once the camera is fully running.
 
   // For night vision, ask the camera itself for the longest/brightest exposure
@@ -363,18 +368,22 @@ async function startCamera() {
   applyMode();
   updateSurfaces();   // VR is on by default, so start the canvas renderer now
   scheduleHide();
+
+  // If masking sound was left on from a previous visit, resume it now — this
+  // click is the user gesture browsers require before any audio may play.
+  if (maskWanted) { ensureMaskAudio(); refreshHeadphoneState(); }
 }
 
 function showGateError(err) {
-  let msg = "Kamera konnte nicht geöffnet werden.";
+  let msg = "The camera could not be opened.";
   if (err && err.name === "NotAllowedError") {
-    msg = "Kamera-Berechtigung wurde blockiert. Erlaube den Kamerazugriff in den Browser-Einstellungen und lade die Seite neu.";
+    msg = "Camera permission was blocked. Allow camera access in your browser settings and reload the page.";
   } else if (err && err.name === "NotFoundError") {
-    msg = "Auf diesem Gerät wurde keine Kamera gefunden.";
+    msg = "No camera was found on this device.";
   } else if (location.protocol !== "https:" && location.hostname !== "localhost") {
-    msg = "Die Kamera funktioniert nur über eine sichere (HTTPS-)Adresse. Öffne diese Seite über einen https://-Link.";
+    msg = "The camera only works over a secure (HTTPS) address. Open this page via an https:// link.";
   } else if (err && err.message) {
-    msg = "Kamerafehler: " + err.message;
+    msg = "Camera error: " + err.message;
   }
   gateError.textContent = msg;
   gateError.hidden = false;
@@ -390,7 +399,7 @@ function applyMode() {
     // there is no flash before the first measurement lands.
     canvas.style.filter = video.style.filter = nightFilter(nightB, nightC);
   } else {
-    // Klar mode: gentle fixed lift, true colour, like looking through glass.
+    // Clear mode: gentle fixed lift, true colour, like looking through glass.
     canvas.style.filter = video.style.filter =
       "brightness(1.12) contrast(1.06) saturate(1.05)";
   }
@@ -476,20 +485,20 @@ function toggleTorch() {
     } catch (_) { /* keep what we have */ }
   }
   if (!("torch" in capabilities)) {
-    torchBtn.textContent = "Kein Licht";
-    setTimeout(() => { torchBtn.textContent = "Licht"; }, 1500);
+    torchBtn.textContent = "No light";
+    setTimeout(() => { torchBtn.textContent = "Light"; }, 1500);
     return;
   }
   torchOn = !torchOn;
   applyTrackSettings()
     .then(() => {
       torchBtn.setAttribute("aria-pressed", String(torchOn));
-      torchBtn.textContent = torchOn ? "Licht an" : "Licht";
+      torchBtn.textContent = torchOn ? "Light on" : "Light";
     })
     .catch(() => {
       torchOn = false;
       torchBtn.setAttribute("aria-pressed", "false");
-      torchBtn.textContent = "Licht";
+      torchBtn.textContent = "Light";
     });
   flashControls();
 }
@@ -497,12 +506,12 @@ function toggleTorch() {
 // ---- Status line -----------------------------------------------------------
 
 function updateStatus(extra) {
-  const label = mode === "night" ? "Nachtsicht" : "Klar-Modus";
+  const label = mode === "night" ? "Night vision" : "Clear mode";
   let text = `${label} · ${zoom.toFixed(1)}×`;
   if (blurOn) {
     text += personBoxes.length
-      ? ` · ${personBoxes.length} ${personBoxes.length === 1 ? "Person" : "Personen"} verwischt`
-      : " · Verwischen an";
+      ? ` · ${personBoxes.length} ${personBoxes.length === 1 ? "person" : "people"} blurred`
+      : " · Blur on";
   }
   if (extra) text = extra;
   statusEl.textContent = text;
@@ -551,6 +560,14 @@ let detecting = false;      // a detection pass is currently running
 let rafId = null;           // render loop handle
 let personBoxes = [];       // latest detected person rectangles, in video pixels
 
+// A small offscreen buffer used to redact each detected person. We downscale
+// the person's region into this tiny canvas and then scale it back up — the
+// averaging on the way down is what hides the face. This works on every
+// browser, unlike canvas ctx.filter "blur()", which older iOS Safari and some
+// in-app browsers silently ignore (that was why no blur appeared at all).
+const blurBuf = document.createElement("canvas");
+const blurBufCtx = blurBuf.getContext("2d");
+
 function loadScript(src) {
   return new Promise((resolve, reject) => {
     const s = document.createElement("script");
@@ -591,13 +608,13 @@ async function toggleBlur() {
   }
   if (!videoTrack) return;
   blurBtn.disabled = true;
-  updateStatus("Personenerkennung lädt…");
+  updateStatus("Loading people detection…");
   try {
     await ensureDetector();
   } catch (err) {
     detectorLoading = null;
     blurBtn.disabled = false;
-    updateStatus("Erkennung konnte nicht geladen werden — beim ersten Mal ist Internet nötig");
+    updateStatus("Detection could not be loaded — internet is needed the first time");
     setTimeout(updateStatus, 3000);
     return;
   }
@@ -783,19 +800,33 @@ function drawEye(dx, dy, dw, dh) {
     for (const b of personBoxes) {
       const padX = b.width * 0.12;
       const padY = b.height * 0.12;
-      // Map the person box from video pixels into this eye's coordinates.
-      const rx = dx + (b.x - padX - sx) * scale;
-      const ry = dy + (b.y - padY - sy) * scale;
-      const rw = (b.width + padX * 2) * scale;
-      const rh = (b.height + padY * 2) * scale;
-      const strength = Math.max(14, Math.round(rw * 0.18));
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(rx, ry, rw, rh);
-      ctx.clip();
-      ctx.filter = `blur(${strength}px)`;
-      ctx.drawImage(video, sx, sy, sw, sh, dx, dy, dw, dh);
-      ctx.restore();
+
+      // Person region in video pixels, padded a little and clamped to the frame.
+      let bx = b.x - padX, by = b.y - padY;
+      let bw = b.width + padX * 2, bh = b.height + padY * 2;
+      bx = Math.max(0, bx);
+      by = Math.max(0, by);
+      bw = Math.min(vw - bx, bw);
+      bh = Math.min(vh - by, bh);
+      if (bw <= 1 || bh <= 1) continue;
+
+      // The same region, mapped into this eye's (canvas) coordinates.
+      const rx = dx + (bx - sx) * scale;
+      const ry = dy + (by - sy) * scale;
+      const rw = bw * scale;
+      const rh = bh * scale;
+
+      // Downscale the region hard, then let the upscale blur it back out.
+      // Smaller buffer = stronger blur; ~1/18 keeps the face unreadable.
+      const smallW = Math.max(6, Math.round(rw / 18));
+      const smallH = Math.max(6, Math.round(rh / 18));
+      blurBuf.width = smallW;          // resizing also clears the buffer
+      blurBuf.height = smallH;
+      blurBufCtx.imageSmoothingEnabled = true;   // average pixels on the way down
+      blurBufCtx.drawImage(video, bx, by, bw, bh, 0, 0, smallW, smallH);
+
+      ctx.imageSmoothingEnabled = true;          // smooth (blur) on the way up
+      ctx.drawImage(blurBuf, 0, 0, smallW, smallH, rx, ry, rw, rh);
     }
   }
 
@@ -836,12 +867,170 @@ document.getElementById("tapZoomOut").addEventListener("click", () => zoomBy(-ZO
 document.getElementById("tapToggle").addEventListener("click", toggleControls);
 toggleBtn.addEventListener("click", toggleControls);
 
+// ---- Headphone masking sound ----------------------------------------------
+// Real noise cancellation lives in the headphones' own hardware and cannot be
+// switched on from a web page. This is the achievable alternative: a soft, steady
+// pink-noise "shhh" played THROUGH the connected headphones to mask background
+// sound. When the feature is on it auto-plays while headphones are detected and
+// stops when they are unplugged. Sound is quiet and fades in/out to avoid startle.
+
+const maskBtn = document.getElementById("maskBtn");
+let maskWanted = false;          // user turned the feature on
+let maskAudioCtx = null;
+let maskGain = null;
+let maskNoise = null;            // looping pink-noise source
+let maskPlaying = false;
+let headphonesPresent = false;   // best-effort detection result
+
+const MASK_VOLUME = 0.06;        // deliberately quiet
+
+function loadMaskPref() {
+  try { return localStorage.getItem("spectraMask") === "1"; } catch (_) { return false; }
+}
+function saveMaskPref(on) {
+  try { localStorage.setItem("spectraMask", on ? "1" : "0"); } catch (_) {}
+}
+
+// Three seconds of looping pink noise (Paul Kellet's economy method). Pink noise
+// is softer and less hissy than white noise, so it masks without being harsh.
+function buildPinkNoiseBuffer(ac) {
+  const len = Math.floor(ac.sampleRate * 3);
+  const buf = ac.createBuffer(1, len, ac.sampleRate);
+  const out = buf.getChannelData(0);
+  let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+  for (let i = 0; i < len; i++) {
+    const white = Math.random() * 2 - 1;
+    b0 = 0.99886 * b0 + white * 0.0555179;
+    b1 = 0.99332 * b1 + white * 0.0750759;
+    b2 = 0.96900 * b2 + white * 0.1538520;
+    b3 = 0.86650 * b3 + white * 0.3104856;
+    b4 = 0.55000 * b4 + white * 0.5329522;
+    b5 = -0.7616 * b5 - white * 0.0168980;
+    out[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362) * 0.11;
+    b6 = white * 0.115926;
+  }
+  return buf;
+}
+
+// Must be called from inside a user gesture (a tap) the first time, or the
+// browser keeps the audio context suspended.
+function ensureMaskAudio() {
+  if (!maskAudioCtx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return false;
+    maskAudioCtx = new AC();
+    maskGain = maskAudioCtx.createGain();
+    maskGain.gain.value = 0;
+    maskGain.connect(maskAudioCtx.destination);
+  }
+  if (maskAudioCtx.state === "suspended") maskAudioCtx.resume().catch(() => {});
+  return true;
+}
+
+function startMaskNoise() {
+  if (maskPlaying || !ensureMaskAudio()) return;
+  maskNoise = maskAudioCtx.createBufferSource();
+  maskNoise.buffer = buildPinkNoiseBuffer(maskAudioCtx);
+  maskNoise.loop = true;
+  // A gentle low-pass keeps it a soft "shhh" rather than a bright hiss.
+  const lp = maskAudioCtx.createBiquadFilter();
+  lp.type = "lowpass";
+  lp.frequency.value = 1800;
+  maskNoise.connect(lp);
+  lp.connect(maskGain);
+  maskNoise.start();
+  const now = maskAudioCtx.currentTime;
+  maskGain.gain.cancelScheduledValues(now);
+  maskGain.gain.setValueAtTime(maskGain.gain.value, now);
+  maskGain.gain.linearRampToValueAtTime(MASK_VOLUME, now + 0.8);  // fade in
+  maskPlaying = true;
+}
+
+function stopMaskNoise() {
+  if (!maskPlaying || !maskAudioCtx) return;
+  const now = maskAudioCtx.currentTime;
+  maskGain.gain.cancelScheduledValues(now);
+  maskGain.gain.setValueAtTime(maskGain.gain.value, now);
+  maskGain.gain.linearRampToValueAtTime(0, now + 0.4);           // fade out
+  const stopping = maskNoise;
+  setTimeout(() => { try { stopping && stopping.stop(); } catch (_) {} }, 500);
+  maskNoise = null;
+  maskPlaying = false;
+}
+
+const HEADPHONE_RE = /head(phone|set)|bluetooth|airpod|buds|wired|a2dp|hands-?free|\bbt\b/i;
+
+// Best-effort headphone detection. Two label-free signals: (1) a device label
+// that names a headset (only available once a permission is granted), and
+// (2) the audio-output COUNT — a phone alone usually exposes one output, and
+// wired/Bluetooth headphones add another. If enumeration isn't available at all
+// we don't block the feature (audio routes to headphones automatically anyway).
+async function detectHeadphones() {
+  try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+      headphonesPresent = true;
+      return;
+    }
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const outs = devices.filter(d => d.kind === "audiooutput");
+    if (outs.length === 0) { headphonesPresent = true; return; }
+    const byLabel = outs.some(d => d.label && HEADPHONE_RE.test(d.label));
+    headphonesPresent = byLabel || outs.length > 1;
+  } catch (_) {
+    headphonesPresent = true;
+  }
+}
+
+function updateMaskUI() {
+  maskBtn.setAttribute("aria-pressed", String(maskWanted));
+  if (!maskWanted) maskBtn.textContent = "Masking sound: Off";
+  else if (maskPlaying) maskBtn.textContent = "Masking sound: On";
+  else maskBtn.textContent = "Masking sound: On (no headphones)";
+}
+
+function syncMask() {
+  if (maskWanted && headphonesPresent) startMaskNoise();
+  else stopMaskNoise();
+  updateMaskUI();
+}
+
+async function refreshHeadphoneState() {
+  await detectHeadphones();
+  syncMask();
+}
+
+// Re-check whenever the audio routing changes (headphones plugged or unplugged).
+if (navigator.mediaDevices) {
+  navigator.mediaDevices.ondevicechange = () => { refreshHeadphoneState(); };
+  if (navigator.mediaDevices.addEventListener) {
+    navigator.mediaDevices.addEventListener("devicechange", () => { refreshHeadphoneState(); });
+  }
+}
+
+maskBtn.addEventListener("click", async () => {
+  maskWanted = !maskWanted;
+  saveMaskPref(maskWanted);
+  if (maskWanted) {
+    ensureMaskAudio();          // we are inside the tap gesture here
+    await refreshHeadphoneState();
+  } else {
+    stopMaskNoise();
+    updateMaskUI();
+  }
+});
+
+maskWanted = loadMaskPref();
+updateMaskUI();
+
 // Best-effort hardware-key support. On a desktop browser the arrow / +- keys
-// work; phone volume buttons are blocked by the browser, so the on-screen and
-// tap-zone controls are the real path on a phone.
+// work. The phone's OWN volume buttons are blocked by the browser, but a paired
+// Bluetooth camera/selfie remote sends AudioVolumeUp / AudioVolumeDown key
+// codes that the page CAN see — so those give real physical zoom buttons.
 window.addEventListener("keydown", (e) => {
-  if (e.key === "ArrowUp" || e.key === "+" || e.key === "=") { zoomBy(ZOOM_STEP); e.preventDefault(); }
-  if (e.key === "ArrowDown" || e.key === "-") { zoomBy(-ZOOM_STEP); e.preventDefault(); }
+  const zoomIn  = e.key === "ArrowUp"   || e.key === "+" || e.key === "=" || e.key === "AudioVolumeUp";
+  const zoomOut = e.key === "ArrowDown" || e.key === "-" || e.key === "AudioVolumeDown";
+  if (zoomIn)  { zoomBy(ZOOM_STEP);  e.preventDefault(); }
+  if (zoomOut) { zoomBy(-ZOOM_STEP); e.preventDefault(); }
   if (e.key === "n" || e.key === "N") { setMode(mode === "night" ? "clear" : "night"); }
 });
 

@@ -1,8 +1,8 @@
 {
-  "name": "Spectra — Sehhilfe",
+  "name": "Spectra — Vision Aid",
   "short_name": "Spectra",
-  "description": "Sehhilfe mit Kamera: vergrößern, Nachtsicht und Personen verwischen.",
-  "lang": "de",
+  "description": "Camera vision aid: zoom, night vision, and blur people.",
+  "lang": "en",
   "start_url": ".",
   "scope": ".",
   "display": "fullscreen",
